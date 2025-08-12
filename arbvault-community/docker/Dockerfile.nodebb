@@ -1,0 +1,33 @@
+FROM node:18-alpine
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    curl \
+    bash \
+    imagemagick
+
+# Create app directory
+WORKDIR /usr/src/app
+
+# Copy NodeBB files
+COPY . .
+
+# Install dependencies
+RUN npm install --production
+
+# Create uploads directory
+RUN mkdir -p public/uploads
+
+# Expose port
+EXPOSE 4567
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:4567/api/ping || exit 1
+
+# Start NodeBB
+CMD ["./nodebb", "start"]

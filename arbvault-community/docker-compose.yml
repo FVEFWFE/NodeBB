@@ -1,0 +1,153 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: arbvault-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/sites:/etc/nginx/sites-enabled:ro
+      - ./nodebb/public:/usr/share/nginx/html/public:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+      - ./docker/logs/nginx:/var/log/nginx
+    depends_on:
+      - nodebb
+    networks:
+      - arbvault-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  nodebb:
+    build:
+      context: ./nodebb
+      dockerfile: ../docker/Dockerfile.nodebb
+    container_name: arbvault-nodebb
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - FORUM_URL=${FORUM_URL:-http://localhost}
+      - FORUM_JWT_SECRET=${FORUM_JWT_SECRET}
+      - MEDUSA_BACKEND_URL=${MEDUSA_BACKEND_URL:-http://localhost:9000}
+      - MEDUSA_ADMIN_API_TOKEN=${MEDUSA_ADMIN_API_TOKEN}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-s3}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - CLAIM_URL_TTL_SECONDS=${CLAIM_URL_TTL_SECONDS:-600}
+      - REP_MIN_AGE_HOURS=${REP_MIN_AGE_HOURS:-24}
+      - REP_DAILY_CAP=${REP_DAILY_CAP:-5}
+      - RATE_LIMITS_ENTER=${RATE_LIMITS_ENTER:-5/10m}
+      - DRAW_CRON=${DRAW_CRON:-0 * * * *}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_DATABASE=nodebb
+      - MONGO_USERNAME=${MONGO_USERNAME:-nodebb}
+      - MONGO_PASSWORD=${MONGO_PASSWORD:-nodebb_pass}
+    volumes:
+      - ./nodebb:/usr/src/app
+      - ./plugins/nodebb-plugin-arbvault-rep:/usr/src/app/node_modules/nodebb-plugin-arbvault-rep
+      - ./plugins/nodebb-plugin-arbvault-giveaways:/usr/src/app/node_modules/nodebb-plugin-arbvault-giveaways
+      - ./themes/nodebb-theme-arbvault:/usr/src/app/node_modules/nodebb-theme-arbvault
+      - nodebb-uploads:/usr/src/app/public/uploads
+      - nodebb-build:/usr/src/app/build
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks:
+      - arbvault-network
+    ports:
+      - "4567:4567"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4567/api/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    container_name: arbvault-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - arbvault-network
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  mongodb:
+    image: mongo:6
+    container_name: arbvault-mongodb
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:-root}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:-root_pass}
+      - MONGO_INITDB_DATABASE=nodebb
+      - MONGO_USERNAME=${MONGO_USERNAME:-nodebb}
+      - MONGO_PASSWORD=${MONGO_PASSWORD:-nodebb_pass}
+    volumes:
+      - mongo-data:/data/db
+      - ./docker/mongo/init-mongo.js:/docker-entrypoint-initdb.d/init-mongo.js:ro
+    networks:
+      - arbvault-network
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Optional: PostgreSQL alternative to MongoDB
+  postgres:
+    image: postgres:15-alpine
+    container_name: arbvault-postgres
+    environment:
+      - POSTGRES_DB=nodebb
+      - POSTGRES_USER=${POSTGRES_USER:-nodebb}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-nodebb_pass}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - arbvault-network
+    ports:
+      - "5432:5432"
+    profiles:
+      - postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nodebb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+networks:
+  arbvault-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  mongo-data:
+  postgres-data:
+  nodebb-uploads:
+  nodebb-build:
